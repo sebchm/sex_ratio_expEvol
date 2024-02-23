@@ -1,0 +1,1 @@
+python ~/sex_ratio_EE/bin/6.filter_by_coverage/FilterPositionOnCoverage.py /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm.sync <T_upper> <T_Lower> > /media/raid/home/schmielewski/sex_ratio_EE/results/6.filter_by_coverage/EE_SR_IndelsRm_FilteredCov.sync
