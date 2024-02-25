@@ -1,0 +1,13 @@
+# create metadata 
+nano meta.yaml
+record_type: chromosome
+assembly:
+  accession:
+  alias:
+  bioproject:
+  biosample:
+  prefix:
+taxon:
+  name: Rhizoglyphus robini
+  taxid: 223528
+  phylum: Arthropoda
