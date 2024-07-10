@@ -15,6 +15,11 @@ infile=args[1]
 
 mySync <- read.sync(infile, gen=c(rep(1,4), rep(28,4)), repl=rep(c(1,2,3,4),2),polarization = "minor")
 
+# validate the sync 
+  # sync_t <- read.table(file="~/sex_ratio_EE/results/6.filter_by_coverage/sync_after_filtering/female-biased_lines/split_files/autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_femaleBiasedLines_segment_aa")
+  # colnames(sync_t) <- c("CHR", "POS", "REF", unique(c("FB-A_F1", "FB-A_F1", "FB-B_F1", "FB-B_F1", "FB-C_F1", "FB-C_F1", "FB-D_F1", "FB-D_F1", "FB-A_F28", "FB-B_F28", "FB-B_F28", "FB-C_F28", "FB-C_F28" , "FB-D_F28", "FB-D_F28")))
+  # colnames(sync_t) <- c("CHR", "POS", "REF", unique(c("FB-A_F1", "FB-A_F1", "FB-B_F1", "FB-B_F1", "FB-C_F1", "FB-C_F1"  , "FB-D_F1", "FB-D_F1", "MB-A_F1", "MB-A_F1", "MB-B_F1", "MB-B_F1", "MB-C_F1", "MB-C_F1", "MB-D_F1", "MB-D_F1", "FB-A_F28", "FB-A_F28", "FB-B_F28", "FB-B_F28", "FB-C_F28", "FB-C_F28" , "FB-D_F28", "FB-D_F28", "MB-A_F28", "MB-A_F28", "MB-B_F28", "MB-B_F28", "MB-C_F28", "MB-C_F28", "MB-D_F28", "MB-D_F28")))
+
 # allele frequency matrix
 af <- af(mySync, repl = rep(c(1,2,3,4),2), gen = c(rep(1,4), rep(28,4)))
 
