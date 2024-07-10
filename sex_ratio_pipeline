@@ -1,0 +1,500 @@
+
+#!bin/bash
+set -e
+set -u
+set -o pipefail
+
+###################
+### 1) QUALIMAP ###
+###################
+    # prepare sample list 
+
+SAMPLE_LIST=~/sex_ratio_EE/data/sample_list.txt
+# extract names of fastq files:
+for file in /media/nas/EE_SR/*.fastq.gz; do
+    name=$(basename "$file" | sed -E 's/VA-3199-([^_]+).*/\1/')
+    echo "$name" 
+done | uniq | sort -V > ${SAMPLE_LIST}
+
+    # run Qualimap
+REPORT_DIR=~/sex_ratio_EE/results/1.multiQC
+SAMPLE_LIST=~/sex_ratio_EE/data/sample_list.txt
+
+# activate conda if it's not activated
+
+# prepare report for each sample
+for SAMPLE in $(cat ${SAMPLE_LIST})
+        do
+fastqc /media/nas/EE_SR/VA-3199-${SAMPLE}* -o ${REPORT_DIR}
+        done
+
+# prepare report for all samples
+multiqc ${REPORT_DIR}/ -o ${REPORT_DIR}
+
+######################################
+### 2) TRIM & MAP & MASK & MARKDUP ###
+######################################
+mkdir ~/sex_ratio_EE/results/2.trim_map_markDup_reads
+### execute script which trims reads with Trimmomatic, maps the reads with bwa mem, masks and marks duplicates with samtools
+
+for IND in $(cat ${SAMPLE_LIST})
+    do
+    source rr_trim_map.sh ${IND} VA-3199-${IND}_*R1_001.fastq.gz VA-3199-${IND}_*R2_001.fastq.gz
+    done
+
+##############################
+### 3) CREATE MPILEUP FILE ###
+##############################
+mkdir ~/sex_ratio_EE/results/3.create_mpileup_files
+    # 4.1 create bam list for mpileup
+    BAM_LIST=~/sex_ratio_EE/results/3.create_mpileup_files/bam_list_for_mpileup.txt
+
+    # 4.2 extract names of fastq files:
+    for SAMPLE in $(cat ${SAMPLE_LIST}); do
+        echo "~/sex_ratio_EE/results/2.trim_map_markDup_reads/${SAMPLE}/${SAMPLE}.dupmarked.AmbigRm.bam" 
+    done > ${BAM_LIST}
+
+    # 4.3 create mpileup file for all samples
+    REF=~/sex_ratio_EE/data/Rhrob_anchored.fa # reference genome
+
+    samtools mpileup -b ${BAM_LIST} -B -Q 0 -f ${REF} -o ~/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup # gzip later
+
+
+###############################################
+### 4) IDENTIFY AND REMOVE INDELS & REPEATS ###
+###############################################
+mkdir ~/sex_ratio_EE/results/3.create_mpileup_files
+    # 4.1 identify indels
+perl ~/software/popoolation_1.2.2/basic-pipeline/identify-genomic-indel-regions.pl --indel-window 5 --min-count 5 --input ~/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup --output ~/sex_ratio_EE/results/4.filter_indels/EE_SR_indels.gtf
+
+    # 4.2 remove indels
+perl ~/software/popoolation_1.2.2/basic-pipeline/filter-pileup-by-gtf.pl --input ~/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup --gtf ~/sex_ratio_EE/results/4.filter_indels/EE_SR_indels.gtf --output ~/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm.mpileup
+gzip ~/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup
+
+    # remove repeat sequences, based on repeat annotation from Chmielewski et al. 2024
+perl ~/software/popoolation_1.2.2/basic-pipeline/filter-pileup-by-gtf.pl --input /media/raid/home/schmielewski/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm.mpileup --gtf /media/raid/home/schmielewski/sex_ratio_EE/results/4.filter_indels/AMU_Rhrob_2024_RepeatModeller_LG.gff --output /media/raid/home/schmielewski/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm_RepeatsRm.mpileup
+
+###########################
+### 5) CREATE SYNC FILE ###
+###########################
+
+PILEUP_INPUT=~/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm_RepeatsRm.mpileup # with filtered indels
+SYNC_FILE=~/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm.sync
+mkdir ~/results/5.create_sync_file
+
+java -ea -Xmx60g -jar ~/software/popoolation2_1201/mpileup2sync.jar \
+	--input ${PILEUP_INPUT} \
+	--output ${ SYNC_FILE} \
+	--fastq - type sanger \
+	--min-qual 30 \
+	--threads 50
+
+#############################
+### 6) FILTER ON COVERAGE ###
+#############################
+mkdir ~/sex_ratio_EE/results/6.filter_by_coverage
+    
+    # 6.1 merge coverage of male and female samples
+        # firstly, merge female and male samples
+awk -f ~/sex_ratio_EE/bin/5.create_sync_file/merge_samples.awk ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm.sync > ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm_sexMergedCov.sync
+
+    # 6.2 split autosomes and sex chromosome
+        # sex chromosome is expected to have lower coverage, as males are hemizygous for X (bulb mites have X0 system). Sex chromosome is LG4 (=chr6)
+grep "^LG4" ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm_sexMergedCov.sync > ~/sex_ratio_EE/results/5.create_sync_file/sexChr/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_sexChromosome.sync
+grep -v "^LG4" ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm_sexMergedCov.sync > ~/sex_ratio_EE/results/5.create_sync_file/autosomes/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_autosomes.sync
+
+    # 6.3 subsample the sync file after merging F and M coverage to visualise the distribution of the coverage
+        # before merging female and male coverage
+grep "^LG4" ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm.sync | awk 'BEGIN {srand()} !/^$/ { if (rand() <= .0006) print $0}' > ~/sex_ratio_EE/results/5.create_sync_file/sexChr/subsampled_files/EE_SR_IndelsRm_RepeatsRm_sexChromosome_subsampled.sync
+grep -v "^LG4" ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm | awk 'BEGIN {srand()} !/^$/ { if (rand() <= .0006) print $0}' > ~/sex_ratio_EE/results/5.create_sync_file/autosomes/subsampled_files/EE_SR_IndelsRm_RepeatsRm_autosomes_subsampled.sync
+        # after merging female and male coverage
+awk 'BEGIN {srand()} !/^$/ { if (rand() <= .0006) print $0}' ~/sex_ratio_EE/results/5.create_sync_file/autosomes/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_autosomes.sync > ~/sex_ratio_EE/results/5.create_sync_file/autosomes/subsampled_files/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_autosomes_subsampled.sync
+awk 'BEGIN {srand()} !/^$/ { if (rand() <= .0006) print $0}' ~/sex_ratio_EE/results/5.create_sync_file/sexChr/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_sexChromosome.sync > ~/sex_ratio_EE/results/5.create_sync_file/sexChr/subsampled_files/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_sexChromosome_subsampled.sync
+
+    # 6.4 run the Rmd script to draw distribution of coverage and determine the taget coverage. Coverage filtering threshold are based on this target (=peak) coverage
+    # ~/sex_ratio_EE/results/5.create_sync_file/draw_distribution_coverage.Rmd
+
+    # 6.5 filter the sync files based on coverage
+python ~/sex_ratio_EE/bin/6.filter_by_coverage/FilterPositionOnCoverage.py /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_sexMergedCov_Autosomes.sync 50 201 > /media/raid/home/schmielewski/sex_ratio_EE/results/6.filter_by_coverage/EE_SR_IndelsRm_sexMergedCov_Autosomes_FilteredCov.sync
+python ~/sex_ratio_EE/bin/6.filter_by_coverage/FilterPositionOnCoverage.py /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_sexChromosome.sync 38 158 > /media/raid/home/schmielewski/sex_ratio_EE/results/6.filter_by_coverage/EE_SR_IndelsRm_sexMergedCov_sexChromosome_FilteredCov.sync
+
+    # 6.6 draw coverage distribution after filtering on coverage
+        # autosomes
+awk 'BEGIN {srand()} !/^$/ { if (rand() <= .0006) print $0}' /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/autosomes/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_autosomes_filteredCov.sync > /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/autosomes/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_autosomes_filteredCov_subsampled.sync
+        # sex chromosome
+awk 'BEGIN {srand()} !/^$/ { if (rand() <= .0001) print $0}' /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/sexChr/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_sexChromosome_filteredCov.sync > /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/sexChr/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_sexChromosome_filteredCov_subsampled.sync
+
+    # ~/sex_ratio_EE/results/5.create_sync_file/draw_distribution_coverage.Rmd
+
+    # 6.7 merge autosomes and sex chromosome
+cat /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/autosomes/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_autosomes_filteredCov_subsampled.sync /media/raid/home/schmielewski/sex_ratio_EE/results/5.create_sync_file/sexChr/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_sexChromosome_filteredCov.sync >  ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.sync # gzip later (!)
+
+###############################
+### 7) GLM ON ALLELE COUNTS ###
+###############################
+    # the aim is to find loci which diverged between male- and female-biased lines consistently among replicates
+
+    # 7.1 split the sync file into smaller chunks- the input is too big to load it into R
+mkdir -p ~/sex_ratio_EE/results/7.glm_afc/split_files_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov_tabSep
+cd ~/sex_ratio_EE/results/7.glm_afc/split_files_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov_tabSep
+split -l 10000 ~/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.sync EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov_segment_
+
+    # 7.2 remove monomorphic positions and keep only positions where coverage in all lines is between 53-215X (or 36-147X for the sex chromosome)
+R_script=~/sex_ratio_EE/bin/7.glm_afc/filter_SNPs_keep_polymorphic.R
+for file in ~/sex_ratio_EE/results/7.glm_afc/split_files_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov_tabSep/*
+ do
+        Rscript --vanilla $R_script $file
+ done > ~/sex_ratio_EE/results/7.glm_afc/polymorphicSnps_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.txt
+
+    # 7.3 prepare input for GLM
+ # remove remaining headers from the SNP file (contig contig_pos SNPID line  A  T  C  G coverage MajAlleleCount_line selection)
+cd ~/sex_ratio_EE/results/7.glm_afc
+grep -v "coverage" polymorphicSnps_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.txt > polymorphicSnps_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.txt_noheader
+mv polymorphicSnps_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.txt_noheader polymorphicSnps_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.txt
+
+# split the input file for GLM to pieces containign 10k lines:
+mkdir ~/sex_ratio_EE/results/7.glm_afc/split_files_GLM_input
+cd ~/sex_ratio_EE/results/7.glm_afc/split_files_GLM_input
+ 
+split -l 10000 ../polymorphicSnps_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov.txt polymorphicSnps_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCov_segment_
+
+    # 7.4 run GLM on allele counts
+R_script_GLM=~/sex_ratio_EE/bin/7.glm_afc/GLM.R
+for file in ~/sex_ratio_EE/results/7.glm_afc/split_files_GLM_input/*
+ do
+        Rscript --vanilla R_script_GLM $file
+ done > ~/sex_ratio_EE/results/7.glm_afc/GLM_output_quasibinomial.txt
+
+    # 7.5 calculate q-values and draw Manhattan plots
+Rsript ~/sex_ratio_EE/bin/7.glm_afc/4.calculate_qvalues_ManhattanPlots.R
+
+##################################################
+### 8) SUBSAMPLE MPILEUP TO A UNIFORM COVERAGE ###
+##################################################
+    # mpileup files with subsampled coverage will be used to estimate Ne and genome-wide diversity measures (pi, theta, D)
+PATH_MPILEUP=~/sex_ratio_EE/results/4.filter_indels/mpileup_separateLines_sexMerged_repeatsRm_indelsRm
+mkdir ${PATH_MPILEUP}/temp_folder
+mkdir ~/sex_ratio_EE/results/8.subsampleCoverage_mpileup
+
+    # 8.1 subsample to uniform coverage
+for line in $(cat ~/sex_ratio_EE/data/line_names.txt)
+        do
+                # unzip the mpileup file, as PoPoolation doesn't accept zcat...
+gunzip -c ${PATH_MPILEUP}/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_${line}.mpileup.gz > ${PATH_MPILEUP}/temp_folder/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_${line}.mpileup
+
+        # run PoPoolation
+perl ~/software/popoolation_1.2.2/basic-pipeline/subsample-pileup.pl \
+        --min-qual 20 \
+        --method withoutreplace \
+        --max-coverage 215 \
+        --fastq-type sanger \
+        --target-coverage 53 \
+        --input ${PATH_MPILEUP}/temp_folder/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_${line}.mpileup \
+        --output ~/sex_ratio_EE/results/8.subsampleCoverage_mpileup/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${line}.mpileup
+
+        # gzip the output
+gzip ~/sex_ratio_EE/results/8.subsampleCoverage_mpileup/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${line}.mpileup
+
+        # remove unzipped mpileup
+rm ${PATH_MPILEUP}/temp_folder/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_${line}.mpileup
+        done
+
+    # 8.2 keep only positions common in all samples
+        # positions with coverage < target-coverage are removed. Due to variance in coverage between samples, the number of positions in the output is different for all samples. To ensure comparability between samples, only SNPs present in all mpileup will be retained
+mkdir mpileup_files_SS_the_same_snps
+        # 8.2.1 get chr and pos from each subsampled mpileup
+> ~/sex_ratio_EE/results/8.subsampleCoverage_mpileup/chr_pos_line_SS_mpileups.txt
+
+for i in $(cat ~/sex_ratio_EE/data/line_names.txt)
+do
+    cut -f1,2 ~/sex_ratio_EE/results/8.subsampleCoverage_mpileup/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}.autosomes.mpileup | sed "s/$/\t${i}/" >> ~/sex_ratio_EE/results/8.subsampleCoverage_mpileup/chr_pos_line_SS_mpileups.txt
+done
+
+        # 8.2.2 make SNPID column
+awk '{print $1, $2, $1"_"$2}' chr_pos_line_SS_mpileups.txt > chr_pos_SNPID_line_SS_mpileups.txt
+
+        # 8.2.3 count number of occurences of each SNP - I expect 16 if a SNP is present in all 16 samples
+cut -f3 chr_pos_SNPID_line_SS_mpileups.txt | sort | uniq -c > counts_chr_pos_SNPID_line_SS_mpileups.txt
+
+        # 8.2.4 count occurences of each snp
+awk '$1 == 16 {print $2 "\t" $3}' counts_chr_pos_SNPID_line_SS_mpileups.txt > common_SNPs_SS_mpileups.txt
+
+        # 8.2.5 keep only SNPs with SNPs present in all 16 samples
+for i in ~/sex_ratio_EE/results/8.subsampleCoverage_mpileup/*mpileup; do
+    awk 'NR==FNR { snps[$1 FS $2]; next } ($1 FS $2) in snps' common_SNPs_SS_mpileups.txt ${i} > mpileup_files_SS_the_same_snps/"${file%.mpileup}_commonSNPs.mpileup"
+done
+
+##########################################
+### 9) GENOME-WIDE DIVERSITY ESTIMATES ###
+##########################################
+
+mkdir ~/sex_ratio_EE/bin/12.genome_wide_diversity
+
+    # 9.1 calculate pi, theta and Tajima's D at introns and exons
+POPOOLATION_PATH=/media/raid/home/schmielewski/software/popoolation_1.2.2
+RESULTS_DIR=/media/raid/home/schmielewski/sex_ratio_EE/results/12.genome_wide_diversity/exon_intron/mpileup_files_SS_the_same_snps
+
+cd /media/raid/home/schmielewski/sex_ratio_EE/results/8.subsampleCoverage_mpileup/mpileup_files_SS_the_same_snps
+
+for MEASURE in pi theta d
+do
+        for GEN in 1 28
+        do
+            for SELECTION in F M
+            do
+                for LINE in A B C D
+                do
+                    for SEQ_TYPE in intron exon
+                    do
+
+# GTF file- has been filtered to contain only genes significantly expresses in adults (from Plesnar-Bielak et al. 2024)
+GTF_FILE=/media/raid/home/schmielewski/sex_ratio_EE/bin/12.genome_wide_diversity/GTF_files/Rhrob_anchored_${SEQ_TYPE}_filtered.gtf
+
+# min-count has to be set to 2 when d is calculated
+    if [ "$MEASURE" == "d" ]; then
+        MIN_COUNT=2
+    else
+        MIN_COUNT=3
+    fi
+
+# Syn-nonsyn-at-position
+perl ${POPOOLATION_PATH}/Variance-at-position.pl \
+       --fastq-type sanger \
+       --measure ${MEASURE} \
+       --gtf ${GTF_FILE} \
+       --pileup filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${SELECTION}-${LINE}_F${GEN}.autosomes.mpileup \
+       --output ${RESULTS_DIR}/filteredSameSNPsAcrossLines_${SELECTION}-${LINE}_F${GEN}.autosomes.SS.${MEASURE}_${SEQ_TYPE} \
+       --pool-size 400 \
+       --min-count ${MIN_COUNT} \
+       --min-coverage 53 \
+       --max-coverage 215 \
+       --min-qual 20 \
+       --snp-output ${RESULTS_DIR}/filteredSameSNPsAcrossLines_${SELECTION}-${LINE}_F${GEN}.SynVSNon.autosomes.${MEASURE}_${SEQ_TYPE}.SS.SNP
+                done
+            done
+        done
+    done
+done
+
+
+    # 9.2 calculate pi, theta and Tajima's D at synonymous and non-synonymous sites
+POPOOLATION_PATH=/media/raid/home/schmielewski/software/popoolation_1.2.2
+GTF_FILE=/media/raid/home/schmielewski/sex_ratio_EE/bin/12.genome_wide_diversity/GTF_files/Rhrob_anchored_CDS_filtered.gtf
+RESULTS_DIR=/media/raid/home/schmielewski/sex_ratio_EE/results/12.genome_wide_diversity/syn_nonsym/mpileup_files_SS_the_same_snps
+
+MPILEUP_PATH=/media/raid/home/schmielewski/sex_ratio_EE/results/8.subsampleCoverage_mpileup/mpileup_files_SS_the_same_snps
+
+for MEASURE in pi theta d
+do
+    for GEN in 1 28
+    do
+        for SELECTION in F M
+        do
+            for LINE in A B C D
+            do
+
+# Syn-nonsyn-at-position
+perl ${POPOOLATION_PATH}/syn-nonsyn/Syn-nonsyn-at-position.pl \
+       --fastq-type sanger \
+       --measure ${MEASURE} \
+       --gtf ${GTF_FILE} \
+       --pileup ${MPILEUP_PATH}/filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${SELECTION}-${LINE}_F${GEN}.autosomes.mpileup \
+       --codon-table ${POPOOLATION_PATH}/syn-nonsyn/codon-table.txt \
+       --nonsyn-length-table ${POPOOLATION_PATH}/syn-nonsyn/nsl_p1.txt \
+       --output ${RESULTS_DIR}/${MEASURE}/filteredSameSNPsAcrossLines_${SELECTION}-${LINE}_F${GEN}.SynVSNon.autosomes.SS.${MEASURE} \
+       --pool-size 400 \
+       --min-count 3 \
+       --min-coverage 53 \
+       --max-coverage 215 \
+       --min-qual 20 \
+       --snp-output ${RESULTS_DIR}/${MEASURE}/filteredSameSNPsAcrossLines_${SELECTION}-${LINE}_F${GEN}.SynVSNon.autosomes.${MEASURE}.SS.SNP \
+       --region-output ${RESULTS_DIR}/${MEASURE}/filteredSameSNPsAcrossLines_${SELECTION}-${LINE}_F${GEN}.SynVSNon.autosomes.${MEASURE}.SS.Region
+            done
+        done
+    done
+done
+
+    # 9.3 calculate pi, theta and Tajima's D in 10kb windows
+RESULTS_DIR=/media/raid/home/schmielewski/sex_ratio_EE/results/12.genome_wide_diversity/windowed_analysis/mpileup_files_SS_the_same_snps
+
+cd /media/raid/home/schmielewski/sex_ratio_EE/results/8.subsampleCoverage_mpileup/mpileup_files_SS_the_same_snps
+
+for MEASURE in pi d theta
+do
+    for GEN in 1 28
+    do
+        for SELECTION in F M
+        do
+            for LINE in A B C D
+            do
+
+# min-count has to be set to 2 when d is calculated
+                    if [ "$MEASURE" == "d" ]; then
+                        MIN_COUNT=2
+                    else
+                        MIN_COUNT=3
+                    fi
+
+# Syn-nonsyn-at-position
+ perl ~/software/popoolation_1.2.2/Variance-sliding.pl \
+       --window-size    10000 \
+       --step-size 10000 \
+       --fastq-type sanger \
+       --measure ${MEASURE} \
+       --input ${MPILEUP}/filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${SELECTION}-${LINE}_F${GEN}.autosomes.mpileup \
+       --output ${RESULTS_DIR}/filteredSameSNPsAcrossLines_${SELECTION}-${LINE}_F${GEN}.10kbWindows.autosomes.SS.${MEASURE} \
+       --pool-size 400 \
+       --min-count ${MIN_COUNT} \
+       --min-coverage 53 \
+       --max-coverage 215 \
+       --min-covered-fraction 0.2 \
+       --min-qual 20 \
+       --snp-output ${RESULTS_DIR}/filteredSameSNPsAcrossLines_${SELECTION}-${LINE}_F${GEN}.10kbWindows.autosomes.${MEASURE}.SS.SNP
+            done
+        done
+    done
+done
+
+
+###############################################
+### 10) EFFECTIVE POPULATION SIZE ESTIMATION ###
+###############################################
+
+    # 10.1 prepare sync files: each sync should contain only one line (F1 and evolved samples)
+
+        # 10.1.1: autosomes: convert SS mpileups to sync
+
+    # mpileup files have one generation only, and I need sync file with 2 generations (CHR, POS, REF, F1, F28 in columns)
+    # so, firstly, I will convert all mpileup files into sync files and paste sync files.
+PATH_MPILEUP=/media/raid/home/schmielewski/sex_ratio_EE/results/8.subsampleCoverage_mpileup/mpileup_files_SS_the_same_snps/autosomes
+PATH_SYNC=/media/raid/home/schmielewski/sex_ratio_EE/results/8.subsampleCoverage_mpileup/mpileup_files_SS_the_same_snps/autosomes/sync_files
+mkdir -p ${PATH_MPILEUP}
+mkdir -p ${PATH_SYNC}
+
+for i in $(cat ~/sex_ratio_EE/data/line_names.txt)
+    do
+PILEUP_INPUT=${PATH_MPILEUP}/filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}.autosomes.mpileup
+SYNC_OUTPUT=${PATH_SYNC}/filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}.autosomes.sync
+
+java -ea -Xmx60g -jar ~/software/popoolation2_1201/mpileup2sync.jar \
+        --input ${PILEUP_INPUT} \
+        --output ${SYNC_OUTPUT} \
+        --fastq-type sanger \
+        --min-qual 20 \
+        --threads 40
+    done
+
+cd ${PATH_SYNC}
+# append F28 to the sync file from F1:
+
+for i in $(cat ~/sex_ratio_EE/data/line_names_noGen.txt)
+    do
+SYNC_F1=${PATH_SYNC}/filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}_F1.autosomes.sync
+SYNC_F28=${PATH_SYNC}/filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}_F28.autosomes.sync
+
+awk 'BEGIN{FS=OFS="\t"} NR==FNR{a[NR]=$4; next} {print $0, a[FNR]}' ${SYNC_F28} ${SYNC_F1} > ${PATH_SYNC}/filteredSameSNPsAcrossLines_EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}_F1_F28.autosomes.sync
+    done
+
+        # 10.1.2: sex chromosome: convert SS mpileups to sync
+
+PATH_MPILEUP=/media/raid/home/schmielewski/sex_ratio_EE/results/8.subsampleCoverage_mpileup/mpileup_files_SS_the_same_snps/sex_chr
+PATH_SYNC=/media/raid/home/schmielewski/sex_ratio_EE/results/8.subsampleCoverage_mpileup/mpileup_files_SS_the_same_snps/sex_chr/sync_files
+mkdir -p ${PATH_MPILEUP}
+mkdir -p ${PATH_SYNC}
+
+for i in $(cat ~/sex_ratio_EE/data/line_names.txt)
+    do
+
+PILEUP_INPUT=${PATH_MPILEUP}/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}.mpileup.gz_commonSNPsOnly_sex_chr.mpileup
+SYNC_OUTPUT=${PATH_SYNC}/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}_commonSNPsOnly_sex_chr.sync
+
+java -ea -Xmx60g -jar ~/software/popoolation2_1201/mpileup2sync.jar \
+        --input ${PILEUP_INPUT} \
+        --output ${SYNC_OUTPUT} \
+        --fastq-type sanger \
+        --min-qual 20 \
+        --threads 45
+    done
+
+cd ${PATH_SYNC}
+# append F28 to the sync file from F1:
+
+for i in $(cat ~/sex_ratio_EE/data/line_names_noGen.txt)
+    do
+SYNC_F1=${PATH_SYNC}/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}_F1_commonSNPsOnly_sex_chr.sync
+SYNC_F28=${PATH_SYNC}/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}_F28_commonSNPsOnly_sex_chr.sync
+
+awk 'BEGIN{FS=OFS="\t"} NR==FNR{a[NR]=$4; next} {print $0, a[FNR]}' ${SYNC_F28} ${SYNC_F1} > ${PATH_SYNC}/EE_SR_IndelsRm_RepeatsRm_filteredCov_sexMerged_subSampledCov_${i}_F1_F28_commonSNPsOnly_sex_chr.sync
+    done
+
+    # 10.2 use estimateNe from poolSeq package to Estimate Ne
+Rscript estimate_Ne.R
+
+#####################
+### 11) ACER TEST ###
+#####################
+    # 11.1 separate male-biased from female-biased lines
+PATH_BASE=~/sex_ratio_EE/results/6.filter_by_coverage/sync_after_filtering
+mkdir -p ${PATH_BASE}/female-biased_lines/split_files
+mkdir -p ${PATH_BASE}/male-biased_lines/split_files
+
+        # 11.1.1 AUTOSOMES: separate male-biased from female-biased lines
+       # get only female-biased lines from the sync file
+cut -f 1,2,3,4,5,6,7,12,13,14,15 ${PATH_BASE}/autosomes/autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCovMAF.sync > ${PATH_BASE}/female-biased_lines/autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_femaleBiasedLines.sync
+
+       # get only male-biased lines from the sync file
+cut -f 1,2,3,8,9,10,11,16,17,18,19 ${PATH_BASE}/autosomes/autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCovMAF.sync > ${PATH_BASE}/male-biased_lines/autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_maleBiasedLines.sync
+
+        # 11.1.2 SEX CHROMOSOME: separate male-biased from female-biased lines
+        # get only female-biased lines from the sync file
+cut -f 1,2,3,4,5,6,7,12,13,14,15 ${PATH_BASE}/sexChr/sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCovMAF.sync > ${PATH_BASE}/female-biased_lines/sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_femaleBiasedLines.sync
+
+       # get only male-biased lines from the sync file
+cut -f 1,2,3,8,9,10,11,16,17,18,19 ${PATH_BASE}/sexChr/sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_allChr_filteredCovMAF.sync > ${PATH_BASE}/male-biased_lines/sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_maleBiasedLines.sync
+
+    # 11.2 split the files into chunks containing only 10k lines
+       # 11.2.1 AUTOSOMES: split the input file to pieces containing 10k lines
+cd ${PATH_BASE}/female-biased_lines/split_files
+split -l 10000 ../autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_femaleBiasedLines.sync autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_femaleBiasedLines_segment_
+
+       cd ${PATH_BASE}/male-biased_lines/split_files
+split -l 10000 ../autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_maleBiasedLines.sync autosomes_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_maleBiasedLines_segment_
+
+        # 11.2.2 SEX CHROMOSOME: split the input file to pieces containing 10k lines
+cd ${PATH_BASE}/female-biased_lines/split_files
+split -l 10000 ../sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_femaleBiasedLines.sync sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_femaleBiasedLines_segment_
+
+cd ${PATH_BASE}/male-biased_lines/split_files
+split -l 10000 ../sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_maleBiasedLines.sync sexChr_EE_SR_IndelsRm_RepeatsRm_sexMergedCov_filteredCovMAF_maleBiasedLines_segment_
+
+       # 11.3 ACER test: female autosomes
+R_script=~/sex_ratio_EE/bin/11.acer_test/afterSyncFiltering/acer_F-biased_lines.R
+
+for file in ~/sex_ratio_EE/results/6.filter_by_coverage/sync_after_filtering/female-biased_lines/split_files/autosomes/*
+ do
+        Rscript --vanilla $R_script $file
+ done > ~/sex_ratio_EE/results/11.acer_test/ACER_output_femaleBiasedLines.txt
+
+        # 11.3 ACER test: male autosomes
+R_script=~/sex_ratio_EE/bin/11.acer_test/afterSyncFiltering/acer_M-biased_lines.R
+
+for file in ~/sex_ratio_EE/results/6.filter_by_coverage/sync_after_filtering/male-biased_lines/split_files/autosomes/*
+ do
+        Rscript --vanilla $R_script $file
+ done > ~/sex_ratio_EE/results/11.acer_test/ACER_output_maleBiasedLines.txt
+
+        # 11.4 ACER test: female sex chromosome
+ R_script=~/sex_ratio_EE/bin/11.acer_test/afterSyncFiltering/acer_F-biased_lines_sexChr.R
+
+for file in ~/sex_ratio_EE/results/6.filter_by_coverage/sync_after_filtering/female-biased_lines/split_files/sexChr/*
+ do
+        Rscript --vanilla $R_script $file
+ done > ~/sex_ratio_EE/results/11.acer_test/ACER_output_femaleBiasedLines_sexChr.txt
+
+        # 11.5 ACER test: male sex chromosome
+ R_script=~/sex_ratio_EE/bin/11.acer_test/afterSyncFiltering/acer_M-biased_lines_sexChr.R
+
+for file in ~/sex_ratio_EE/results/6.filter_by_coverage/sync_after_filtering/male-biased_lines/split_files/sexChr/*
+ do
+        Rscript --vanilla $R_script $file
+ done > ~/sex_ratio_EE/results/11.acer_test/ACER_output_maleBiasedLines_sexChr.txt
