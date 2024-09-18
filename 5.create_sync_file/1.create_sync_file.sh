@@ -1,3 +1,10 @@
+#!bin/bash
+set -e
+set -u
+set -o pipefail
+
+# crease a sync file used as an input for PoPoolation and PoPoolation2
+
 PILEUP_INPUT=/media/raid/home/schmielewski/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm.mpileup # with filtered indels
 SYNC_OUTPUT=/sex_ratio_EE/results/5.create_sync_file/EE_SR_IndelsRm.sync
 
