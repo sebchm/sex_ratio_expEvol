@@ -1,6 +1,25 @@
-      # identify indels
-perl ~/software/popoolation_1.2.2/basic-pipeline/identify-genomic-indel-regions.pl --indel-window 5 --min-count 5 --input /media/raid/home/schmielewski/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup --output /media/raid/home/schmielewski/sex_ratio_EE/results/4.filter_indels/EE_SR_indels.gtf
-        # not sure that --min-count to use. Barghi et al. 2017 used --min-count 5 or --min-count 2% (?) and a value between 2 and 5 is most usually used. However, Franssen et al. 2015 used –min-count 90
-       
-        # remove indels
-perl ~/software/popoolation_1.2.2/basic-pipeline/filter-pileup-by-gtf.pl --input /media/raid/home/schmielewski/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup --gtf /media/raid/home/schmielewski/sex_ratio_EE/results/4.filter_indels/EE_SR_indels.gtf --output /media/raid/home/schmielewski/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm.mpileup
+#!bin/bash
+set -e
+set -u
+set -o pipefail
+
+    # 4.1 identify indels
+perl ~/software/popoolation_1.2.2/basic-pipeline/identify-genomic-indel-regions.pl \
+      --indel-window 5 \
+      --min-count 5 \
+      --input ~/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup \
+      --output ~/sex_ratio_EE/results/4.filter_indels/EE_SR_indels.gtf
+
+    # 4.2 remove indels
+perl ~/software/popoolation_1.2.2/basic-pipeline/filter-pileup-by-gtf.pl \
+      --input ~/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup \
+      --gtf ~/sex_ratio_EE/results/4.filter_indels/EE_SR_indels.gtf \
+      --output ~/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm.mpileup
+      
+gzip ~/sex_ratio_EE/results/3.create_mpileup_files/EE_SR.mpileup
+
+    # remove repeat sequences (satellites, transposons etc.), based on repeat annotation from Chmielewski et al. 2024
+perl ~/software/popoolation_1.2.2/basic-pipeline/filter-pileup-by-gtf.pl \
+      --input ~/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm.mpileup \
+      --gtf ~/sex_ratio_EE/results/4.filter_indels/AMU_Rhrob_2024_RepeatModeller_LG.gff \
+      --output ~/sex_ratio_EE/results/4.filter_indels/EE_SR_IndelsRm_RepeatsRm.mpileup
