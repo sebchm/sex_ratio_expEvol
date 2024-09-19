@@ -1,24 +1,23 @@
----
-title: "theta_pi_d_final_clean"
-author: "S. Chmielewski"
-date: "2024-07-11"
-output: html_document
----
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+# title: " calculate theta_pi_d "
+# author: "S. Chmielewski"
+# date: "2024-07-11"
+# output: html_document
+
+
+# setup
 library(dplyr)
 library(stringr)
 library(ggplot2)
 library(tidyr)
 library(ggrepel)
-```
 
 
-Input mpileup file has been subsampled to coverage of 52X and has been filtered on a mean coverage across all samples. 
+
+# Input mpileup file has been subsampled to coverage of 52X and has been filtered on a mean coverage across all samples. 
 
 
-```{r load exon and intron data }
+# load exon and intron data 
 
 load_exonIntron  <- function(directory) {
   
@@ -68,10 +67,8 @@ data_exon_intron <- na.omit(data_exon_intron)
 # remove MB-D- a male-biased line which has higher Ne compared to other M-B lines
   # no change (this was tested)
   
-```
 
-
-```{r load syn vs nonSym: load data }
+# load syn vs nonSym: load data
 
 load_synNonsym  <- function(directory) {
   
@@ -111,11 +108,7 @@ data_synNonsym <- load_synNonsym("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis
 
 colnames(data_synNonsym) <- c("gene","NS.length","S.length","NS.no.Snp","S.no.Snp","NS.measure","S.measure","line","generation", "measure", "treatment")
 
-```
-
-
-
-```{r load windowed data }
+# load windowed data 
 
 load_windowed_pi_d_theta  <- function(directory) {
   
@@ -157,13 +150,13 @@ windowed_pi_d_theta <- load_windowed_pi_d_theta("~/sex_ratio_EE/results/12.synVS
 
 colnames(windowed_pi_d_theta) <- c("LG", "window_pos", "n_snps", "prop_covered", "value", "line", "generation", "measure", "treatment")
 
-```
+
 
 For each gene, proportion of length with sufficient coverage was calculated (i.e. between --min-coverage 53 --max-coverage 215). Keep only genes which proportion of length with expected coverage is above 60% in all samples. To ensure that the same set of genes is compared between different measures (pi, theta, d) and sequence types (intron, exon), keep the same set in all comparisons.
 
 * but, for now, the D is not used, so do not filter by d * 
 
-```{r removing genes with low coverage}
+# removing genes with low coverage}
 # draw the distribution of prop. gene covered for exons and introns
 ggplot(data_exon_intron, aes(prop_covered, fill = type)) +
   geom_density(alpha = .3) +
@@ -189,10 +182,8 @@ genes_sufficient_coverage_all_samples <- data_exon_intron %>%
   # keep only genes with sufficient coverage in all 16 samples- based only on exons
   filter(type == "exon" & n == 16 | type == "intron") 
 
-```
 
-
-```{r window filtering}
+# window filtering
 # draw the distribution of proportion of window with sufficient coverage
 windowed_pi_d_theta %>%
   ggplot(aes(prop_covered)) +
@@ -235,13 +226,13 @@ windowed_pi_filtered_allSamples <- windowed_pi_d_theta %>%
 windowed_theta_filtered_allSamples <- windowed_pi_d_theta %>%
   filter(measure == "theta") %>%
   filter(window_id %in% windows_allSamples_allGenerations_theta$window_id)
-```
 
 
-When the genes are filtered based on their proportion with sufficient coverage, introns are more likely to be removed. To make the introns and exons comparable, keep only genes with both exons and introns (remove intronless genes).
+
+#When the genes are filtered based on their proportion with sufficient coverage, introns are more likely to be removed. To make the    #introns and exons comparable, keep only genes with both exons and introns (remove intronless genes).
 
 
-```{r pi: analyse only genes with exons having cov > 0.6 in all 16 samples}
+# pi: analyse only genes with exons having cov > 0.6 in all 16 samples}
 
   # exons
 pi_exon_mean_line <- data_exon_intron %>%
@@ -298,11 +289,8 @@ post_hoc_results <- pairwise.t.test(pi_exon_mean_line$mean_pi, interaction_level
 
 post_hoc_results$p.value
 
-```
 
-
-
-```{r intron pi}
+# intron pi}
 
 # introns
 pi_intron_mean_line <- data_exon_intron %>%
@@ -358,10 +346,10 @@ post_hoc_results <- pairwise.t.test(pi_intron_mean_line$mean_pi, interaction_lev
 print(post_hoc_results)
 post_hoc_results$p.value
 
-```
 
 
-```{r theta}
+
+# theta}
 
 # exons
 theta_exon_mean_line <- data_exon_intron %>%
@@ -416,11 +404,11 @@ interaction_levels <- with(theta_exon_mean_line, interaction(treatment, generati
 post_hoc_results <- pairwise.t.test(theta_exon_mean_line$mean_theta, interaction_levels, p.adjust.method = "bonferroni")
 print(post_hoc_results)
 
-```
 
 
 
-```{r intron theta}
+
+# intron theta}
 theta_intron_mean_line <- data_exon_intron %>%
   filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
   filter(measure == "theta" & type == "intron") %>%
@@ -471,10 +459,10 @@ summary(model)
 interaction_levels <- with(theta_intron_mean_line, interaction(treatment, generation))
 post_hoc_results <- pairwise.t.test(theta_intron_mean_line$mean_theta, interaction_levels, p.adjust.method = "bonferroni")
 print(post_hoc_results)
-```
 
 
-```{r windowed PI }
+
+# windowed PI }
 pi_mean_line <- windowed_pi_filtered_allSamples %>%
   filter(measure == "pi") %>%
   group_by(treatment, line, generation) %>%
@@ -524,10 +512,10 @@ summary(model)
 interaction_levels <- with(pi_mean_line, interaction(treatment, generation))
 post_hoc_results <- pairwise.t.test(pi_mean_line$mean_pi, interaction_levels, p.adjust.method = "bonferroni")
 post_hoc_results
-```
 
 
-```{r windowed theta }
+
+# windowed theta }
 theta_mean_line <- windowed_theta_filtered_allSamples %>%
   group_by(treatment, line, generation) %>%
   filter(measure == "theta") %>%
@@ -592,10 +580,10 @@ interaction_levels <- with(theta_mean_line, interaction(treatment, generation))
 post_hoc_results <- pairwise.t.test(theta_mean_line$mean_theta, interaction_levels, p.adjust.method = "bonferroni")
 
 post_hoc_results
-```
 
 
-```{r nucleotide diversity: syn. PI}
+
+# nucleotide diversity: syn. PI}
 # filter the genes: all genes ahve to be present in all 16 samples
 data_synNonsym %>%
   filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
@@ -662,10 +650,10 @@ interaction_levels <- with(pi_syn_mean_line, interaction(treatment, generation))
 post_hoc_results <- pairwise.t.test(pi_syn_mean_line$mean_pi_syn, interaction_levels, p.adjust.method = "bonferroni")
 print(post_hoc_results)
 
-```
 
 
-```{r nucleotide diversity: non-syn. PI}
+
+# nucleotide diversity: non-syn. PI}
 # synonymous pi
 pi_nonSyn_mean_line <- data_synNonsym %>%
   filter(measure == "pi") %>%
@@ -722,9 +710,9 @@ interaction_levels <- with(pi_nonSyn_mean_line, interaction(treatment, generatio
 post_hoc_results <- pairwise.t.test(pi_nonSyn_mean_line$mean_pi_nonSyn, interaction_levels, p.adjust.method = "bonferroni")
 print(post_hoc_results)
 
-```
 
-```{r synonymous theta}
+
+# synonymous theta}
 # synonymous theta
 theta_syn_mean_line <- data_synNonsym %>%
   filter(measure == "theta") %>%
@@ -784,8 +772,8 @@ interaction_levels <- with(theta_syn_mean_line, interaction(treatment, generatio
 post_hoc_results <- pairwise.t.test(theta_syn_mean_line$mean_theta_syn, interaction_levels, p.adjust.method = "bonferroni")
 print(post_hoc_results)
 
-```
-```{r non-syn. theta}
+
+# non-syn. theta}
 # synonymous theta
 theta_nonSyn_mean_line <- data_synNonsym %>%
   filter(measure == "theta") %>%
@@ -843,10 +831,10 @@ interaction_levels <- with(theta_nonSyn_mean_line, interaction(treatment, genera
 post_hoc_results <- pairwise.t.test(theta_nonSyn_mean_line$mean_theta_nonSyn, interaction_levels, p.adjust.method = "bonferroni")
 print(post_hoc_results)
 
-```
 
 
-```{r combine plots}
+
+# combine plots}
 library(cowplot)
 combined_plot <- plot_grid(pi_exon_plot_noLabels, theta_exon_plot_noLabels, pi_nonSyn_plot_noLabels, theta_nonSym_plot_noLabels, pi_syn_plot_noLabels, syn_theta_plot_noLabels, pi_windowed_plot_noLabels, theta_windowed_plot_noLabels, ncol = 2, nrow = 4)
 
@@ -917,9 +905,9 @@ final_plot <- plot_grid(legend, combined_plot, ncol = 1, rel_heights = c(0.1, 1)
 
 # ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/GW_diversity.svg", plot = final_plot, width = 8, height = 8, dpi = 300, units = "in", bg = "white")
 
-```
 
-```{r}
+
+#}
 library(ggplot2)
 library(cowplot)
 
@@ -1001,7 +989,7 @@ print(final_plot)
 # ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/GW_diversity2_legend.svg", plot = plot_for_legend, width = 8, height = 8, dpi = 300, units = "in", bg = "white")
 
 
-```
+
 
 Deltas:
 
@@ -1015,7 +1003,7 @@ So I re-calculate deltas in 2 ways: 1) I do it as in NEE, 2) I exclude genes wit
 
 More genes contribute to synonymous F28/F1, because it is not calculated gene-wise, but genome-wide, so genes with F28/F1 == Inf or == NA are contributiong to Syn F28/F1, but not to the NonSym F28/F1.
 
-```{r delta PI version 1: as in NEE}
+# delta PI version 1: as in NEE}
 
 # non-synonymous PI: comparison F28 to F1  
 pi_nonSyn_F28_F1 <- data_synNonsym %>%
@@ -1116,11 +1104,11 @@ delta_pi_plot_noLabel
 
 t_test_result <- t.test(delta_NS_S ~ treatment, data = delta_pi_synGW_nonSym, var.equal = TRUE)
 
-```
 
 
 
-```{r delta THETA version 1: as in NEE}
+
+# delta THETA version 1: as in NEE}
 # non-synonymous theta: comparison F28 to F1  
 theta_nonSyn_F28_F1 <- data_synNonsym %>%
   filter(measure == "theta") %>% # keep only theta
@@ -1212,9 +1200,9 @@ plot(delta_theta_plot_noLabel)
 
 f_test_result <- var.test(delta_NS_S ~ treatment, data = delta_theta_synGW_nonSym)
 t_test_result <- t.test(delta_NS_S ~ treatment, data = delta_theta_synGW_nonSym, var.equal = TRUE)
-```
 
-```{r plot delta}
+
+# plot delta}
 delta_pi_label <- ggdraw() + draw_label(expression(bold(Delta ~  pi)), size = 16)
 delta_theta_label <- ggdraw() + draw_label(expression(bold(Delta ~  theta)), size = 16)
 
@@ -1229,5 +1217,5 @@ combined_plot_deltas
 # ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/deltas.svg", plot = combined_plot_deltas, width = 8, height = 4, dpi = 300, units = "in", bg = "white")
 
 
-```
+
 
