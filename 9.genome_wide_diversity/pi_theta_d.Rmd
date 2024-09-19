@@ -1,0 +1,1233 @@
+---
+title: "theta_pi_d_final_clean"
+author: "S. Chmielewski"
+date: "2024-07-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(tidyr)
+library(ggrepel)
+```
+
+
+Input mpileup file has been subsampled to coverage of 52X and has been filtered on a mean coverage across all samples. 
+
+
+```{r load exon and intron data }
+
+load_exonIntron  <- function(directory) {
+  
+  files <- list.files(directory, pattern = "(exon|intron)$", full.names = TRUE) # list files in the directory
+  
+  data_list <- list()
+  
+  for (file in files) {
+    file_name <- basename(file) # get a file name
+    
+    parts <- unlist(strsplit(file_name, "_")) # split the filename into 2 parts
+    line_name <- parts[2] # line name
+    generation_name <- unlist(strsplit(parts[3], "\\."))[1] # generation
+    exon_intron <- unlist(strsplit(parts[4], "\\.")) # exon/intron
+    measure_name <- unlist(strsplit(parts[3], "\\."))[4] # measure
+  
+    
+    if (measure_name == "d") { # skip d for now
+      next 
+    }
+    
+    paste0("Loading file ", file)
+    data <- read.table(file, header = FALSE, na.strings = "na") # load a file
+
+    data <- data %>% # add columns
+      mutate(line = line_name,
+             generation = generation_name, 
+             type = exon_intron, 
+             measure = measure_name, 
+             treatment = ifelse(str_detect(line, "^F"), "female-biased", "male_biased"))
+    
+    data_list[[file_name]] <- data # append the data frame to the list
+  }
+
+  data_all <- bind_rows(data_list)
+  
+  return(data_all)
+}
+
+# run on the directory with the files
+data_exon_intron <- load_exonIntron("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/exon_intron/mpileup_files_SS_the_same_snps/")
+colnames(data_exon_intron) <- c("gene", "n_snps", "prop_covered", "value", colnames(data_exon_intron)[5:9])
+
+# remove exons/introns with prop_covered < 0.6 -- for these the value of pi/theta/d is NA
+data_exon_intron <- na.omit(data_exon_intron)
+
+# remove MB-D- a male-biased line which has higher Ne compared to other M-B lines
+  # no change (this was tested)
+  
+```
+
+
+```{r load syn vs nonSym: load data }
+
+load_synNonsym  <- function(directory) {
+  
+  files <- list.files(directory, pattern = ".*.SynVSNon.autosomes.SS.(pi|theta)$", full.names = TRUE) 
+  
+  data_list <- list()
+  
+  for (file in files) {
+    file_name <- basename(file) # get a file name
+    
+    parts <- unlist(strsplit(file_name, "\\.")) # split the filename into 2 parts
+    line_name <- unlist(strsplit(parts[1], "_"))[2] # line name
+    generation_name <- unlist(strsplit(parts[1], "_"))[3] # generation # generation
+    #exon_intron <- unlist(strsplit(parts[3], "\\.")) # exon/intron
+    measure_name <- parts[5] # measure
+  
+    
+    paste0("Loading file ", file)
+    data <- read.table(file, header = FALSE, na.strings = "na") # load a file
+
+    data <- data %>% # add columns
+      mutate(line = line_name,
+             generation = generation_name, 
+             measure = measure_name, 
+             treatment = ifelse(str_detect(line, "^F"), "female-biased", "male_biased"))
+    
+    data_list[[file_name]] <- data # append the data frame to the list
+  }
+
+  data_all <- bind_rows(data_list)
+  
+  return(data_all)
+}
+
+# run on the directory with the files
+data_synNonsym <- load_synNonsym("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/syn_nonsym/mpileup_files_SS_the_same_snps")
+
+colnames(data_synNonsym) <- c("gene","NS.length","S.length","NS.no.Snp","S.no.Snp","NS.measure","S.measure","line","generation", "measure", "treatment")
+
+```
+
+
+
+```{r load windowed data }
+
+load_windowed_pi_d_theta  <- function(directory) {
+  
+  files <- list.files(directory, pattern = "(pi|d|theta)$", full.names = TRUE) # list files in the directory
+  
+  data_list <- list()
+  
+  for (file in files) {
+    file_name <- basename(file) # get a file name
+    
+    parts <- unlist(strsplit(file_name, "\\.")) # split the filename into 2 parts
+    line_name <- unlist(strsplit(parts[1], "_"))[2] # line name
+    generation_name <- unlist(strsplit(parts[1], "_"))[3] # generation
+    measure_name <- parts[5] # measure
+  
+    #if (measure_name == "d") { # skip d until it's calculated 
+    #  next 
+    #}
+    
+    paste0("Loading file ", file)
+    data <- read.table(file, header = FALSE, na.strings = "na") # load a file
+
+    data <- data %>% # add columns
+      mutate(line = line_name,
+             generation = generation_name, 
+             measure = measure_name, 
+             treatment = ifelse(str_detect(line, "^F"), "female-biased", "male_biased"))
+    
+    data_list[[file_name]] <- data # append the data frame to the list
+  }
+
+  data_all <- bind_rows(data_list)
+  
+  return(data_all)
+}
+
+# run on the directory with the files
+windowed_pi_d_theta <- load_windowed_pi_d_theta("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/windowed_analysis/mpileup_files_SS_the_same_snps/")
+
+colnames(windowed_pi_d_theta) <- c("LG", "window_pos", "n_snps", "prop_covered", "value", "line", "generation", "measure", "treatment")
+
+```
+
+For each gene, proportion of length with sufficient coverage was calculated (i.e. between --min-coverage 53 --max-coverage 215). Keep only genes which proportion of length with expected coverage is above 60% in all samples. To ensure that the same set of genes is compared between different measures (pi, theta, d) and sequence types (intron, exon), keep the same set in all comparisons.
+
+* but, for now, the D is not used, so do not filter by d * 
+
+```{r removing genes with low coverage}
+# draw the distribution of prop. gene covered for exons and introns
+ggplot(data_exon_intron, aes(prop_covered, fill = type)) +
+  geom_density(alpha = .3) +
+  facet_grid(~measure)
+
+# draw the prop. gene covered for exons and introns vs value
+data_exon_intron %>%
+  filter(measure != "d") %>% # remove d
+ggplot(aes(prop_covered, value)) +
+  geom_point(aes(fill = type),alpha = .3) +
+  geom_smooth(aes(prop_covered, value, color = type)) +
+  facet_grid(~measure) +
+  xlim(0.5, NA) +
+  theme(legend.position = "top")
+
+
+# keep only genes which had sufficient coverage in all 16 samples
+genes_sufficient_coverage_all_samples <- data_exon_intron %>%
+  filter(measure != "d") %>% # remove d
+  filter(prop_covered >= 0.6) %>%
+  group_by(gene, type, measure) %>%
+  tally() %>%
+  # keep only genes with sufficient coverage in all 16 samples- based only on exons
+  filter(type == "exon" & n == 16 | type == "intron") 
+
+```
+
+
+```{r window filtering}
+# draw the distribution of proportion of window with sufficient coverage
+windowed_pi_d_theta %>%
+  ggplot(aes(prop_covered)) +
+  geom_histogram() +
+  facet_grid(line ~ generation)
+
+windowed_pi_d_theta <- windowed_pi_d_theta %>%
+  filter(prop_covered >= 0.6)
+
+### check if the same number of windows is compared between the samples
+  # no, e.g. LG1 1850000 - only in few samples the threshold has been reached. 
+
+# make a list of windows which have sufficient coverage in all 8 samples in both generations
+  # pi
+windows_allSamples_allGenerations_pi <- windowed_pi_d_theta %>%
+  filter(measure == "pi") %>%
+  group_by(LG, window_pos) %>%
+  tally() %>%
+  filter(n == 16) %>%
+  select(-n) %>%
+  mutate(window_id = paste0(LG, "_", window_pos))
+
+  # theta
+windows_allSamples_allGenerations_theta <- windowed_pi_d_theta %>%
+  filter(measure == "theta") %>%
+  group_by(LG, window_pos) %>%
+  tally() %>%
+  filter(n == 16) %>%
+  select(-n) %>%
+  mutate(window_id = paste0(LG, "_", window_pos))
+
+  # make window id variable
+windowed_pi_d_theta <- windowed_pi_d_theta %>%
+  mutate(window_id = paste0(LG, "_", window_pos))
+
+windowed_pi_filtered_allSamples <- windowed_pi_d_theta %>%
+  filter(measure == "pi") %>%
+  filter(window_id %in% windows_allSamples_allGenerations_pi$window_id)
+
+windowed_theta_filtered_allSamples <- windowed_pi_d_theta %>%
+  filter(measure == "theta") %>%
+  filter(window_id %in% windows_allSamples_allGenerations_theta$window_id)
+```
+
+
+When the genes are filtered based on their proportion with sufficient coverage, introns are more likely to be removed. To make the introns and exons comparable, keep only genes with both exons and introns (remove intronless genes).
+
+
+```{r pi: analyse only genes with exons having cov > 0.6 in all 16 samples}
+
+  # exons
+pi_exon_mean_line <- data_exon_intron %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  filter(measure == "pi" & type == "exon") %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_pi = mean(value, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+pi_exon_mean <- pi_exon_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_pi_gen = mean(mean_pi),
+    sd_pi = sd(mean_pi),
+    n = n(),
+    se_pi = sd_pi / sqrt(n))
+
+pi_exon_plot <- ggplot(pi_exon_mean, aes(generation, mean_pi_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_exon_mean_line, aes(generation, mean_pi, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+    geom_label_repel(data = pi_exon_mean_line, aes(generation, mean_pi, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("exon" ~ pi)) 
+
+print(pi_exon_plot)
+
+
+pi_exon_plot_noLabels <- ggplot(pi_exon_mean, aes(generation, mean_pi_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_exon_mean_line, aes(generation, mean_pi, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("exon" ~ pi)) +
+  xlab("")
+
+
+model <- aov(mean_pi ~ treatment * generation, data = pi_exon_mean_line)
+summary(model)
+interaction_levels <- with(pi_exon_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(pi_exon_mean_line$mean_pi, interaction_levels, p.adjust.method = "bonferroni")
+
+post_hoc_results$p.value
+
+```
+
+
+
+```{r intron pi}
+
+# introns
+pi_intron_mean_line <- data_exon_intron %>%
+  filter(measure == "pi" & type == "intron") %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_pi = mean(value, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+pi_intron_mean <- pi_intron_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_pi_gen = mean(mean_pi),
+    sd_pi = sd(mean_pi),
+    n = n(),
+    se_pi = sd_pi / sqrt(n))
+
+
+pi_intron_plot <- ggplot(pi_intron_mean, aes(generation, mean_pi_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_intron_mean_line, aes(generation, mean_pi, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+  geom_label_repel(data = pi_intron_mean_line, aes(generation, mean_pi, label = line, color = treatment),
+                  position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("intron" ~ pi))
+
+print(pi_exon_plot)
+
+pi_intron_plot_noLabels <- ggplot(pi_intron_mean, aes(generation, mean_pi_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_intron_mean_line, aes(generation, mean_pi, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("intron" ~ pi))
+
+
+model <- aov(mean_pi ~ treatment * generation, data = pi_intron_mean_line)
+summary(model)
+interaction_levels <- with(pi_intron_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(pi_intron_mean_line$mean_pi, interaction_levels, p.adjust.method = "bonferroni")
+print(post_hoc_results)
+post_hoc_results$p.value
+
+```
+
+
+```{r theta}
+
+# exons
+theta_exon_mean_line <- data_exon_intron %>%
+  filter(measure == "theta" & type == "exon") %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_theta = mean(value, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+theta_exon_mean <- theta_exon_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_theta_gen = mean(mean_theta),
+    sd_theta = sd(mean_theta),
+    n = n(),
+    se_theta = sd_theta / sqrt(n))
+
+
+theta_exon_plot <-  ggplot(theta_exon_mean, aes(generation, mean_theta_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_exon_mean_line, aes(generation, mean_theta, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+    geom_label_repel(data = theta_exon_mean_line, aes(generation, mean_theta, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("exon" ~ theta))
+
+plot(theta_exon_plot)
+
+theta_exon_plot_noLabels <-  ggplot(theta_exon_mean, aes(generation, mean_theta_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_exon_mean_line, aes(generation, mean_theta, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("exon" ~ theta)) +
+  xlab("")
+
+model <- aov(mean_theta ~ treatment * generation, data = theta_exon_mean_line)
+summary(model)
+interaction_levels <- with(theta_exon_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(theta_exon_mean_line$mean_theta, interaction_levels, p.adjust.method = "bonferroni")
+print(post_hoc_results)
+
+```
+
+
+
+```{r intron theta}
+theta_intron_mean_line <- data_exon_intron %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  filter(measure == "theta" & type == "intron") %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_theta = mean(value, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+theta_intron_mean <- theta_intron_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_theta_gen = mean(mean_theta),
+    sd_theta = sd(mean_theta),
+    n = n(),
+    se_theta = sd_theta / sqrt(n))
+
+theta_intron_plot <-  ggplot(theta_intron_mean, aes(generation, mean_theta_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_intron_mean_line, aes(generation, mean_theta, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+    geom_label_repel(data = theta_intron_mean_line, aes(generation, mean_theta, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression(theta ~ "intron"))
+
+plot(theta_intron_plot)
+
+
+theta_intron_plot_noLabels <-  ggplot(theta_intron_mean, aes(generation, mean_theta_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_intron_mean_line, aes(generation, mean_theta, color = treatment),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("intron" ~ theta))
+
+model <- aov(mean_theta ~ treatment * generation, data = theta_intron_mean_line)
+summary(model)
+interaction_levels <- with(theta_intron_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(theta_intron_mean_line$mean_theta, interaction_levels, p.adjust.method = "bonferroni")
+print(post_hoc_results)
+```
+
+
+```{r windowed PI }
+pi_mean_line <- windowed_pi_filtered_allSamples %>%
+  filter(measure == "pi") %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_pi = mean(value, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+
+pi_mean <- pi_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_pi_gen = mean(mean_pi),
+    sd_pi = sd(mean_pi),
+    n = n(),
+    se_pi = sd_pi / sqrt(n))
+
+pi_windowed_plot <-  ggplot(pi_mean, aes(generation, mean_pi_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_mean_line, aes(generation, mean_pi, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = pi_mean_line, aes(generation, mean_pi, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("windowed" ~ pi))
+
+plot(pi_windowed_plot)
+
+pi_windowed_plot_noLabels <-  ggplot(pi_mean, aes(generation, mean_pi_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_mean_line, aes(generation, mean_pi, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("windowed" ~ pi))
+
+model <- aov(mean_pi ~ treatment * generation, data = pi_mean_line)
+summary(model)
+interaction_levels <- with(pi_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(pi_mean_line$mean_pi, interaction_levels, p.adjust.method = "bonferroni")
+post_hoc_results
+```
+
+
+```{r windowed theta }
+theta_mean_line <- windowed_theta_filtered_allSamples %>%
+  group_by(treatment, line, generation) %>%
+  filter(measure == "theta") %>%
+  summarise(mean_theta = mean(value, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+theta_mean <- theta_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_theta_gen = mean(mean_theta),
+    sd_theta = sd(mean_theta),
+    n = n(),
+    se_theta = sd_theta / sqrt(n))
+
+
+ggplot(theta_mean, aes(generation, mean_theta_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta), 
+                  position = position_dodge(width = 0.5), linewidth = 1.4) +
+  geom_point(data = theta_mean_line, aes(generation, mean_theta, color = treatment), 
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.5, seed = 1234), size = 2) +
+  geom_label_repel(data = theta_mean_line, aes(generation, mean_theta, label = line, color = treatment), 
+                  position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.5, seed = 1234), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "top") +
+  ggtitle("Mean  theta, 10 kb windows", subtitle = "all windows had to have prop_cov > 0.6 in all samples in both generations")
+
+
+
+theta_windowed_plot <-  ggplot(theta_mean, aes(generation, mean_theta_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_mean_line, aes(generation, mean_theta, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = theta_mean_line, aes(generation, mean_theta, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("windowed" ~ theta))
+
+plot(theta_windowed_plot)
+
+theta_windowed_plot_noLabels <-  ggplot(theta_mean, aes(generation, mean_theta_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_theta_gen - sd_theta, ymax = mean_theta_gen + sd_theta),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_mean_line, aes(generation, mean_theta, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("windowed" ~ theta))
+
+
+model <- aov(mean_theta ~ treatment * generation, data = theta_mean_line)
+summary(model)
+interaction_levels <- with(theta_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(theta_mean_line$mean_theta, interaction_levels, p.adjust.method = "bonferroni")
+
+post_hoc_results
+```
+
+
+```{r nucleotide diversity: syn. PI}
+# filter the genes: all genes ahve to be present in all 16 samples
+data_synNonsym %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  filter(measure == "pi") %>%
+  group_by(gene) %>%
+  tally()
+
+# synonymous pi
+pi_syn_mean_line <- data_synNonsym %>%
+  filter(measure == "pi") %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_pi_syn = mean(S.measure, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+
+pi_syn_mean <- pi_syn_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_pi_syn_gen = mean(mean_pi_syn),
+    sd_pi = sd(mean_pi_syn),
+    n = n(),
+    se_pi = sd_pi / sqrt(n), 
+    ci_lower = mean_pi_syn_gen - qt(0.95, df = n-1) * se_pi,
+    ci_upper = mean_pi_syn_gen + qt(0.95, df = n-1) * se_pi)
+
+
+pi_syn_plot <-  ggplot(pi_syn_mean, aes(generation, mean_pi_syn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_syn_mean_line, aes(generation, mean_pi_syn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = pi_syn_mean_line, aes(generation, mean_pi_syn, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("syn." ~ pi))
+
+plot(pi_syn_plot)
+
+pi_syn_plot_noLabels <-  ggplot(pi_syn_mean, aes(generation, mean_pi_syn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_syn_mean_line, aes(generation, mean_pi_syn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+  theme_bw() +
+  xlab("") +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("syn." ~ pi))
+
+
+plot(pi_syn_plot)
+
+model <- aov(mean_pi_syn ~ treatment * generation, data = pi_syn_mean_line)
+summary(model)
+interaction_levels <- with(pi_syn_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(pi_syn_mean_line$mean_pi_syn, interaction_levels, p.adjust.method = "bonferroni")
+print(post_hoc_results)
+
+```
+
+
+```{r nucleotide diversity: non-syn. PI}
+# synonymous pi
+pi_nonSyn_mean_line <- data_synNonsym %>%
+  filter(measure == "pi") %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_pi_nonSyn = mean(NS.measure, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+
+pi_nonSyn_mean <- pi_nonSyn_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_pi_nonSyn_gen = mean(mean_pi_nonSyn),
+    sd_pi = sd(mean_pi_nonSyn),
+    n = n(),
+    se_pi = sd_pi / sqrt(n), 
+    ci_lower = mean_pi_nonSyn_gen - qt(0.95, df = n-1) * se_pi,
+    ci_upper = mean_pi_nonSyn_gen + qt(0.95, df = n-1) * se_pi)
+
+pi_nonSyn_plot <-  ggplot(pi_nonSyn_mean, aes(generation, mean_pi_nonSyn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_nonSyn_mean_line, aes(generation, mean_pi_nonSyn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = pi_nonSyn_mean_line, aes(generation, mean_pi_nonSyn, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("non-syn." ~ pi))
+
+
+plot(pi_nonSyn_plot)
+
+pi_nonSyn_plot_noLabels <-  ggplot(pi_nonSyn_mean, aes(generation, mean_pi_nonSyn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_nonSyn_mean_line, aes(generation, mean_pi_nonSyn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+  theme_bw() +
+  xlab("") +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("non-syn." ~ pi))
+
+model <- aov(mean_pi_nonSyn ~ treatment * generation, data = pi_nonSyn_mean_line)
+summary(model)
+interaction_levels <- with(pi_nonSyn_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(pi_nonSyn_mean_line$mean_pi_nonSyn, interaction_levels, p.adjust.method = "bonferroni")
+print(post_hoc_results)
+
+```
+
+```{r synonymous theta}
+# synonymous theta
+theta_syn_mean_line <- data_synNonsym %>%
+  filter(measure == "theta") %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_theta_syn = mean(S.measure, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+
+theta_syn_mean <- theta_syn_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_theta_syn_gen = mean(mean_theta_syn),
+    sd_theta = sd(mean_theta_syn),
+    n = n(),
+    se_theta = sd_theta / sqrt(n), 
+    ci_lower = mean_theta_syn_gen - qt(0.95, df = n-1) * se_theta,
+    ci_upper = mean_theta_syn_gen + qt(0.95, df = n-1) * se_theta)
+
+syn_theta_plot <-  ggplot(theta_syn_mean, aes(generation, mean_theta_syn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_syn_mean_line, aes(generation, mean_theta_syn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = theta_syn_mean_line, aes(generation, mean_theta_syn, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("syn." ~ theta))
+
+
+plot(syn_theta_plot)
+
+syn_theta_plot_noLabels <-  ggplot(theta_syn_mean, aes(generation, mean_theta_syn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_syn_mean_line, aes(generation, mean_theta_syn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+  theme_bw() +
+  xlab("") +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("syn." ~ theta))
+
+
+
+
+model <- aov(mean_theta_syn ~ treatment * generation, data = theta_syn_mean_line)
+summary(model)
+interaction_levels <- with(theta_syn_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(theta_syn_mean_line$mean_theta_syn, interaction_levels, p.adjust.method = "bonferroni")
+print(post_hoc_results)
+
+```
+```{r non-syn. theta}
+# synonymous theta
+theta_nonSyn_mean_line <- data_synNonsym %>%
+  filter(measure == "theta") %>%
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(treatment, line, generation) %>%
+  summarise(mean_theta_nonSyn = mean(NS.measure, na.rm = T)) %>%
+  mutate(gen_treatment = paste(generation, treatment, sep = "_"))
+
+
+theta_nonSyn_mean <- theta_nonSyn_mean_line %>%
+    group_by(treatment, generation) %>%
+    summarise(mean_theta_nonSyn_gen = mean(mean_theta_nonSyn),
+    sd_theta = sd(mean_theta_nonSyn),
+    n = n(),
+    se_theta = sd_theta / sqrt(n), 
+    ci_lower = mean_theta_nonSyn_gen - qt(0.95, df = n-1) * se_theta,
+    ci_upper = mean_theta_nonSyn_gen + qt(0.95, df = n-1) * se_theta)
+
+
+theta_nonSym_plot <-  ggplot(theta_nonSyn_mean, aes(generation, mean_theta_nonSyn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_nonSyn_mean_line, aes(generation, mean_theta_nonSyn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = theta_nonSyn_mean_line, aes(generation, mean_theta_nonSyn, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("non-syn." ~ theta))
+
+
+theta_nonSym_plot_noLabels <-  ggplot(theta_nonSyn_mean, aes(generation, mean_theta_nonSyn_gen, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = theta_nonSyn_mean_line, aes(generation, mean_theta_nonSyn, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+  theme_bw() +
+  xlab("") +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = expression("non-syn." ~ theta))
+
+plot(theta_nonSym_plot)
+
+model <- aov(mean_theta_nonSyn ~ treatment * generation, data = theta_nonSyn_mean_line)
+summary(model)
+interaction_levels <- with(theta_nonSyn_mean_line, interaction(treatment, generation))
+post_hoc_results <- pairwise.t.test(theta_nonSyn_mean_line$mean_theta_nonSyn, interaction_levels, p.adjust.method = "bonferroni")
+print(post_hoc_results)
+
+```
+
+
+```{r combine plots}
+library(cowplot)
+combined_plot <- plot_grid(pi_exon_plot_noLabels, theta_exon_plot_noLabels, pi_nonSyn_plot_noLabels, theta_nonSym_plot_noLabels, pi_syn_plot_noLabels, syn_theta_plot_noLabels, pi_windowed_plot_noLabels, theta_windowed_plot_noLabels, ncol = 2, nrow = 4)
+
+combined_plot
+
+#####
+pi_label <- ggdraw() + draw_label(expression(bold(pi)), size = 16)
+theta_label <- ggdraw() + draw_label(expression(bold(theta)), size = 16)
+
+# combine plots
+# combined_plot <- plot_grid(
+#   pi_label, theta_label,
+#   pi_exon_plot_noLabels, theta_exon_plot_noLabels,
+#   pi_nonSyn_plot_noLabels, theta_nonSym_plot_noLabels,
+#   pi_syn_plot_noLabels, syn_theta_plot_noLabels,
+#   pi_windowed_plot_noLabels, theta_windowed_plot_noLabels,
+#   ncol = 2, nrow = 5,
+#   rel_heights = c(0.1, 1, 1, 1, 1))
+# 
+# combined_plot <- combined_plot +
+#   theme(text = element_text(size = 14))
+
+# Apply theme with larger text size to each individual plot
+pi_exon_plot_noLabels <- pi_exon_plot_noLabels + theme(text = element_text(size = 19))
+theta_exon_plot_noLabels <- theta_exon_plot_noLabels + theme(text = element_text(size = 19))
+pi_nonSyn_plot_noLabels <- pi_nonSyn_plot_noLabels + theme(text = element_text(size = 19))
+theta_nonSym_plot_noLabels <- theta_nonSym_plot_noLabels + theme(text = element_text(size = 19))
+pi_syn_plot_noLabels <- pi_syn_plot_noLabels + theme(text = element_text(size = 19))
+syn_theta_plot_noLabels <- syn_theta_plot_noLabels + theme(text = element_text(size = 19))
+pi_windowed_plot_noLabels <- pi_windowed_plot_noLabels + theme(text = element_text(size = 19))
+theta_windowed_plot_noLabels <- theta_windowed_plot_noLabels + theme(text = element_text(size = 19))
+
+# Combine the plots with plot_grid
+combined_plot <- plot_grid(
+  pi_label, theta_label,
+  pi_exon_plot_noLabels, theta_exon_plot_noLabels,
+  pi_nonSyn_plot_noLabels, theta_nonSym_plot_noLabels,
+  pi_syn_plot_noLabels, syn_theta_plot_noLabels,
+  pi_windowed_plot_noLabels, theta_windowed_plot_noLabels,
+  ncol = 2, nrow = 5,
+  rel_heights = c(0.1, 1, 1, 1, 1)
+)
+
+# Display the combined plot
+combined_plot
+
+
+# get a legend
+plot_for_legend <- pi_exon_mean %>%
+  mutate(treatment = ifelse(treatment == "female-biased", "female-biased", "male-biased")) %>%
+ggplot(aes(generation, mean_pi_gen, color = treatment)) +
+  geom_point() +
+  geom_pointrange(ymin = 0, ymax = 1,linewidth = 1.4) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  theme(legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.box = element_blank(),
+        legend.title = element_blank())+ theme(text = element_text(size = 19))
+
+
+legend <- get_legend(plot_for_legend)
+
+# Combine the legend with the main plot
+final_plot <- plot_grid(legend, combined_plot, ncol = 1, rel_heights = c(0.1, 1))
+
+#####
+# ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/GW_diversity3.png", plot = final_plot, width = 8, height = 11, dpi = 300, units = "in", bg = "white")
+
+# ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/GW_diversity.svg", plot = final_plot, width = 8, height = 8, dpi = 300, units = "in", bg = "white")
+
+```
+
+```{r}
+library(ggplot2)
+library(cowplot)
+
+# Modify the individual plots to remove x-axis titles for all except the bottom ones
+pi_exon_plot_noTitle <- pi_exon_plot_noLabels + theme(axis.title.x = element_blank())
+theta_exon_plot_noTitle <- theta_exon_plot_noLabels + theme(axis.title.x = element_blank())
+pi_nonSyn_plot_noTitle <- pi_nonSyn_plot_noLabels + theme(axis.title.x = element_blank())
+theta_nonSym_plot_noTitle <- theta_nonSym_plot_noLabels + theme(axis.title.x = element_blank())
+pi_syn_plot_noTitle <- pi_syn_plot_noLabels + theme(axis.title.x = element_blank())
+syn_theta_plot_noTitle <- syn_theta_plot_noLabels + theme(axis.title.x = element_blank())
+
+# Ensure x-axis labels are kept for all plots
+pi_windowed_plot_withLabels <- pi_windowed_plot_noLabels + theme(axis.title.x = element_text())
+theta_windowed_plot_withLabels <- theta_windowed_plot_noLabels + theme(axis.title.x = element_text())
+
+# Combine plots into a grid
+combined_plot <- plot_grid(
+  pi_exon_plot_noTitle, theta_exon_plot_noTitle,
+  pi_nonSyn_plot_noTitle, theta_nonSym_plot_noTitle,
+  pi_syn_plot_noTitle, syn_theta_plot_noTitle,
+  pi_windowed_plot_withLabels, theta_windowed_plot_withLabels,
+  ncol = 2, nrow = 4, align = "v",
+  rel_heights = c(1, 1, 1, 1), # Adjust heights to be equal for all rows
+  rel_widths = c(1, 1) # Adjust widths to be equal for all columns
+)
+
+# Add labels for pi and theta
+pi_label <- ggdraw() + draw_label(expression(bold(pi)), size = 16)
+theta_label <- ggdraw() + draw_label(expression(bold(theta)), size = 16)
+
+# Create a dummy plot to extract the legend
+pi_exon_mean <- pi_exon_mean %>%
+  mutate(treatment2 = ifelse(treatment == "male_biased", "male-biased", "female-biased"))
+
+pi_exon_mean_line <- pi_exon_mean_line %>%
+  mutate(treatment2 = ifelse(treatment == "male_biased", "male-biased", "female-biased"))
+
+
+plot_for_legend <- ggplot(pi_exon_mean, aes(generation, mean_pi_gen, color = treatment2)) +
+  geom_pointrange(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = mean_pi_gen - sd_pi, ymax = mean_pi_gen + sd_pi),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = pi_exon_mean_line, aes(generation, mean_pi, color = treatment2),
+             alpha = 0.5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3) +
+  theme_bw() +
+  theme(legend.direction="horizontal",
+        legend.title = element_blank(), 
+        text = element_text(family = "Arial")) +
+  scale_color_manual(values = c("#009E73", "#0072B2"))
+
+
+# Combine plots with labels
+combined_plot_with_labels <- plot_grid(
+  pi_label, theta_label,
+  pi_exon_plot_noTitle, theta_exon_plot_noTitle,
+  pi_nonSyn_plot_noTitle, theta_nonSym_plot_noTitle,
+  pi_syn_plot_noTitle, syn_theta_plot_noTitle,
+  pi_windowed_plot_withLabels, theta_windowed_plot_withLabels,
+  ncol = 2, nrow = 5,
+  rel_heights = c( 0.1, 1, 1, 1, 1), # Adjust heights to make room for labels
+  align = "hv" 
+)
+
+final_plot <- plot_grid(legend, combined_plot_with_labels, ncol = 1, rel_heights = c(0.4, 1))
+
+
+
+#final_plot <- plot_grid(legend, combined_plot_with_labels, ncol = 1, rel_heights = c(0.1, 1))
+final_plot <- plot_grid(legend, combined_plot_with_labels, ncol = 1, rel_heights = c(0.1, 1))
+
+# Display the final plot
+print(final_plot) 
+
+#ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/GW_diversity2.png", plot = final_plot, width = 8, height = 8, dpi = 300, units = "in", bg = "white")
+
+# ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/GW_diversity2.svg", plot = final_plot, width = 8, height = 8, dpi = 300, units = "in", bg = "white")
+
+# ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/GW_diversity2_legend.svg", plot = plot_for_legend, width = 8, height = 8, dpi = 300, units = "in", bg = "white")
+
+
+```
+
+Deltas:
+
+1) delta PI:
+
+
+Correct deltas according to NEE: instead of subtracting PI nonsyn - PI syn, subtract PI nonsyn - GW PI syn.
+I think it is not entirely correct, as in NS less genes are taken into account, because genes with 0 PI in F0 and F28 are removed- you cannot divide by zero. Also, there are genes with PI=0 in F28 and PI>0 in F1, so division gives 0. These genes are taken into account in syn PI. 
+
+So I re-calculate deltas in 2 ways: 1) I do it as in NEE, 2) I exclude genes with NS PI = 0 in F1 and F28 (from both NS and S) 
+
+More genes contribute to synonymous F28/F1, because it is not calculated gene-wise, but genome-wide, so genes with F28/F1 == Inf or == NA are contributiong to Syn F28/F1, but not to the NonSym F28/F1.
+
+```{r delta PI version 1: as in NEE}
+
+# non-synonymous PI: comparison F28 to F1  
+pi_nonSyn_F28_F1 <- data_synNonsym %>%
+  filter(measure == "pi") %>% # keep only PI
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(generation, line, treatment, gene) %>%
+  select(generation, line, treatment, gene, NS.measure) %>% # here NS or S indicate non-syn or synonymous positions
+  pivot_wider(id_cols = c(line, treatment, gene), # change fromat to wider 
+              names_from = generation, 
+              values_from = NS.measure, 
+              names_prefix = "pi_nonSym_") %>%
+  mutate(pi_nonSym_F28_div_F1 = pi_nonSym_F28/pi_nonSym_F1, 
+         pi_nonSym_F28_div_F1_logPlus1 = log(pi_nonSym_F28_div_F1 + 1))
+
+# remove infinite values from data
+pi_nonSyn_F28_F1 <- pi_nonSyn_F28_F1 %>%
+ filter(is.finite(pi_nonSym_F28_div_F1_logPlus1))
+
+
+###  genome-wide synonymous diversity (remove genes excluded from NS)
+  # calculate GW-mean PI for all synonymous sites (within each line)
+pi_syn_F28_F1_GW <- data_synNonsym %>%
+  filter(measure == "pi") %>% # keep only PI
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(generation, line, treatment) %>%
+  summarise(avg_pi_line_gen = mean(S.measure)) %>%
+  #select(generation, line, treatment, S.measure) %>%
+  pivot_wider(id_cols = c(line, treatment), # change fromat to wider 
+              names_from = generation, 
+              values_from = avg_pi_line_gen, 
+              names_prefix = "GW_pi_sym_") %>%
+  mutate(GW_pi_sym_F28_div_F1 = GW_pi_sym_F28/GW_pi_sym_F1, 
+         GW_pi_sym_F28_div_F1_logPlus1 = log(GW_pi_sym_F28_div_F1 + 1))
+
+#### calculate delta with corrected Syn (GW), as in NEE:
+delta_pi_synGW_nonSym <- pi_nonSyn_F28_F1 %>%
+  left_join(pi_syn_F28_F1_GW[,c(1,6)], by = "line") %>%
+  mutate(delta_NS_S = pi_nonSym_F28_div_F1_logPlus1 - GW_pi_sym_F28_div_F1_logPlus1, 
+         treatment = ifelse(str_detect(line, "^F"), "female-biased", "male-biased")) %>%
+  group_by(line, treatment) %>%
+  summarise(delta_NS_S = mean(delta_NS_S))
+
+# prepare mean non-sym across lines within treatment
+delta_pi_synGW_nonSym_mean <- delta_pi_synGW_nonSym %>%
+    group_by(treatment) %>%
+    summarise(mean_delta_NS_S = mean(delta_NS_S),
+    sd_delta = sd(delta_NS_S),
+    n = n(),
+    se_delta = sd_delta / sqrt(n), 
+    ci_lower = mean_delta_NS_S - qt(0.95, df = n-1) * se_delta,
+    ci_upper = mean_delta_NS_S + qt(0.95, df = n-1) * se_delta)
+
+
+delta_pi_plot <-  ggplot(delta_pi_synGW_nonSym_mean, aes(treatment, mean_delta_NS_S, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = delta_pi_synGW_nonSym, aes(treatment, delta_NS_S, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = delta_pi_synGW_nonSym, aes(treatment, delta_NS_S, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = "nonSyn PI gene - syn PI GW")
+
+plot(delta_pi_plot)
+
+library(grid)
+equation_grob <- grobTree(textGrob(expression(Delta * pi * (frac(F[28]*theta[gene], F[1]*theta[gene]) - frac(F[28]*theta[GW], F[1]*theta[GW]))),
+                                   gp = gpar(fontsize = 14, col = "black"), x = 0.5, y = 0.5, hjust = 0.5, vjust = 0.5))
+
+
+delta_pi_plot_noLabel <-  ggplot(delta_pi_synGW_nonSym_mean, aes(treatment, mean_delta_NS_S, color = treatment)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "gray30") +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = delta_pi_synGW_nonSym, aes(treatment, delta_NS_S, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.3, dodge.width = 0.6, seed = 123), size = 2) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = "nonSyn PI gene - syn PI GW") +
+  ylim(min = min(delta_pi_synGW_nonSym$delta_NS_S), 
+       max = (max(delta_pi_synGW_nonSym$delta_NS_S)+ 0.001)) +
+  labs(y = expression(Delta ~ pi ), 
+     x = "") +
+   theme(text = element_text(size = 19))
+
+  
+
+delta_pi_plot_noLabel
+
+t_test_result <- t.test(delta_NS_S ~ treatment, data = delta_pi_synGW_nonSym, var.equal = TRUE)
+
+```
+
+
+
+```{r delta THETA version 1: as in NEE}
+# non-synonymous theta: comparison F28 to F1  
+theta_nonSyn_F28_F1 <- data_synNonsym %>%
+  filter(measure == "theta") %>% # keep only theta
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(generation, line, treatment, gene) %>%
+  select(generation, line, treatment, gene, NS.measure) %>% # here NS or S indicate non-syn or synonymous positions
+  pivot_wider(id_cols = c(line, treatment, gene), # change fromat to wider 
+              names_from = generation, 
+              values_from = NS.measure, 
+              names_prefix = "theta_nonSym_") %>%
+  mutate(theta_nonSym_F28_div_F1 = theta_nonSym_F28/theta_nonSym_F1, 
+         theta_nonSym_F28_div_F1_logPlus1 = log(theta_nonSym_F28_div_F1 + 1))
+
+# remove infinite values from data
+theta_nonSyn_F28_F1 <- theta_nonSyn_F28_F1 %>%
+ filter(is.finite(theta_nonSym_F28_div_F1_logPlus1))
+
+
+###  genome-wide synonymous diversity (remove genes excluded from NS)
+  # calculate GW-mean theta for all synonymous sites (within each line)
+theta_syn_F28_F1_GW <- data_synNonsym %>%
+  filter(measure == "theta") %>% # keep only theta
+  filter(gene %in% genes_sufficient_coverage_all_samples$gene) %>%
+  group_by(generation, line, treatment) %>%
+  summarise(avg_theta_line_gen = mean(S.measure)) %>%
+  #select(generation, line, treatment, S.measure) %>%
+  pivot_wider(id_cols = c(line, treatment), # change fromat to wider 
+              names_from = generation, 
+              values_from = avg_theta_line_gen, 
+              names_prefix = "GW_theta_sym_") %>%
+  mutate(GW_theta_sym_F28_div_F1 = GW_theta_sym_F28/GW_theta_sym_F1, 
+         GW_theta_sym_F28_div_F1_logPlus1 = log(GW_theta_sym_F28_div_F1 + 1))
+
+#### calculate delta with corrected Syn (GW), as in NEE:
+delta_theta_synGW_nonSym <- theta_nonSyn_F28_F1 %>%
+  left_join(theta_syn_F28_F1_GW[,c(1,6)], by = "line") %>%
+  mutate(delta_NS_S = theta_nonSym_F28_div_F1_logPlus1 - GW_theta_sym_F28_div_F1_logPlus1, 
+         treatment = ifelse(str_detect(line, "^F"), "female-biased", "male-biased")) %>%
+  group_by(line, treatment) %>%
+  summarise(delta_NS_S = mean(delta_NS_S))
+
+# prepare mean non-sym across lines within treatment
+delta_theta_synGW_nonSym_mean <- delta_theta_synGW_nonSym %>%
+    group_by(treatment) %>%
+    summarise(mean_delta_NS_S = mean(delta_NS_S),
+    sd_delta = sd(delta_NS_S),
+    n = n(),
+    se_delta = sd_delta / sqrt(n), 
+    ci_lower = mean_delta_NS_S - qt(0.95, df = n-1) * se_delta,
+    ci_upper = mean_delta_NS_S + qt(0.95, df = n-1) * se_delta)
+
+
+delta_theta_plot <-  ggplot(delta_theta_synGW_nonSym_mean, aes(treatment, mean_delta_NS_S, color = treatment)) +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = delta_theta_synGW_nonSym, aes(treatment, delta_NS_S, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 2) +
+    geom_label_repel(data = delta_theta_synGW_nonSym, aes(treatment, delta_NS_S, label = line, color = treatment),
+                   position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6, seed = 12345), size = 3, fill = NA) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = "nonSyn" ~ theta ~ "gene - syn" ~ theta ~ "GW") 
+
+delta_theta_plot_noLabel <-  ggplot(delta_theta_synGW_nonSym_mean, aes(treatment, mean_delta_NS_S, color = treatment)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray30") +
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                 position = position_dodge(width = 0.5), linewidth = 1.4) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(data = delta_theta_synGW_nonSym, aes(treatment, delta_NS_S, color = treatment),
+             alpha = .5, position = position_jitterdodge(jitter.width = 0.3, dodge.width = 0.6, seed = 123), size = 2)+
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.title = element_blank()) +
+  scale_color_manual(values = c("#009E73", "#0072B2")) +
+  labs(y = "nonSyn" ~ theta ~ "gene - syn" ~ theta ~ "GW") +
+  ylim(min = min(delta_theta_synGW_nonSym$delta_NS_S), 
+       max = (max(delta_pi_synGW_nonSym$delta_NS_S)+ 0.001)) +
+  labs(y = expression(Delta ~ theta ), 
+     x = "") +
+   theme(text = element_text(size = 19))
+
+
+plot(delta_theta_plot_noLabel)
+
+f_test_result <- var.test(delta_NS_S ~ treatment, data = delta_theta_synGW_nonSym)
+t_test_result <- t.test(delta_NS_S ~ treatment, data = delta_theta_synGW_nonSym, var.equal = TRUE)
+```
+
+```{r plot delta}
+delta_pi_label <- ggdraw() + draw_label(expression(bold(Delta ~  pi)), size = 16)
+delta_theta_label <- ggdraw() + draw_label(expression(bold(Delta ~  theta)), size = 16)
+
+
+combined_plot_deltas <- plot_grid(delta_pi_plot_noLabel, delta_theta_plot_noLabel,
+  ncol = 2, nrow = 1)
+
+combined_plot_deltas
+
+#ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/deltas.png", plot = combined_plot_deltas, width = 8, height = 4, dpi = 300, units = "in", bg = "white")
+
+# ggsave("~/sex_ratio_EE/results/12.synVSnonsyn_Analysis_subsampling/deltas.svg", plot = combined_plot_deltas, width = 8, height = 4, dpi = 300, units = "in", bg = "white")
+
+
+```
+
