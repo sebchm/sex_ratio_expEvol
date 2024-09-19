@@ -1,3 +1,8 @@
+#!/bin/bash
+set -e
+set -u
+set -o pipefail
+
 ##################################################
 ### 8) SUBSAMPLE MPILEUP TO A UNIFORM COVERAGE ###
 ##################################################
